@@ -1,0 +1,93 @@
+from __future__ import annotations
+
+import subprocess
+import sys
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Iterable
+
+
+_BROWSER_CHECK_DONE = False
+
+
+async def safe_close_playwright_resources(context, browser) -> None:
+    for closer in (context.close, browser.close):
+        try:
+            await closer()
+        except Exception:
+            pass
+
+
+def ensure_browser_installed(quiet: bool = False) -> None:
+    """Ensure Playwright Chromium is available before launching the browser."""
+
+    global _BROWSER_CHECK_DONE
+    if _BROWSER_CHECK_DONE:
+        return
+
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError as exc:
+        raise SystemExit(
+            "Playwright 未安装，请先执行: pip install playwright && playwright install chromium"
+        ) from exc
+
+    with sync_playwright() as playwright:
+        chromium_path = Path(playwright.chromium.executable_path)
+        if chromium_path.is_file():
+            _BROWSER_CHECK_DONE = True
+            return
+
+    if not quiet:
+        print("Chromium 未安装，正在自动安装 Playwright 浏览器...")
+
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"],
+            check=True,
+        )
+    except subprocess.CalledProcessError:
+        if not quiet:
+            print("浏览器自动安装失败，请手动执行: playwright install chromium")
+        raise SystemExit(1)
+    except KeyboardInterrupt:
+        if not quiet:
+            print("浏览器安装已取消")
+        raise SystemExit(1)
+
+    if not quiet:
+        print("Chromium 安装完成")
+    _BROWSER_CHECK_DONE = True
+
+
+async def save_storage_state(context, save_storage_state_path: str | None) -> None:
+    if not save_storage_state_path:
+        return
+    Path(save_storage_state_path).parent.mkdir(parents=True, exist_ok=True)
+    await context.storage_state(path=save_storage_state_path)
+
+
+@asynccontextmanager
+async def browser_page(
+    *,
+    headless: bool,
+    timeout_ms: int,
+    storage_state_path: str | None = None,
+    permissions: Iterable[str] | None = None,
+):
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch(headless=headless)
+        context_kwargs = {"viewport": {"width": 1440, "height": 900}}
+        if storage_state_path:
+            context_kwargs["storage_state"] = storage_state_path
+        context = await browser.new_context(**context_kwargs)
+        if permissions:
+            await context.grant_permissions(list(permissions))
+        page = await context.new_page()
+        page.set_default_timeout(timeout_ms)
+        try:
+            yield context, page
+        finally:
+            await safe_close_playwright_resources(context, browser)

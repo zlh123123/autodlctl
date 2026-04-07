@@ -1,0 +1,65 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "autodlctl"
+version = "0.1.0"
+description = "CLI-first AutoDL console automation powered by Playwright."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [
+  { name = "zlh123123" }
+]
+keywords = ["autodl", "automation", "cli", "playwright"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Internet",
+  "Topic :: System :: Systems Administration",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "playwright>=1.40",
+]
+
+[project.optional-dependencies]
+dev = [
+  "build>=1.2.2",
+  "pytest>=8.2",
+  "pytest-asyncio>=0.23",
+  "twine>=5.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/zlh123123/autodlctl"
+Repository = "https://github.com/zlh123123/autodlctl"
+Issues = "https://github.com/zlh123123/autodlctl/issues"
+
+[project.scripts]
+autodlctl = "autodlctl.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/autodlctl"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/tools",
+  "/README.md",
+  "/LICENSE",
+  "/pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
