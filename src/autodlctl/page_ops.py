@@ -629,3 +629,45 @@ async def list_instances(page, max_tables: int = 8) -> dict[str, Any]:
         """,
         max_tables,
     )
+
+
+async def advance_list_page(page, timeout_ms: int = 5000) -> bool:
+    pagination = page.locator(".el-pagination")
+    if await pagination.count() == 0:
+        return False
+
+    next_button = pagination.locator(".btn-next").first
+    if await next_button.count() == 0 or await next_button.is_disabled():
+        return False
+
+    active_page = pagination.locator(".number.active").first
+    previous_page = None
+    if await active_page.count() > 0:
+        previous_page = normalize_space(await active_page.inner_text())
+
+    first_row = page.locator("table tbody tr").first
+    previous_first_row = None
+    if await first_row.count() > 0:
+        previous_first_row = normalize_space(await first_row.inner_text())
+
+    await next_button.click()
+    deadline = asyncio.get_running_loop().time() + max(0.5, timeout_ms / 1000)
+    while asyncio.get_running_loop().time() <= deadline:
+        try:
+            if await active_page.count() > 0:
+                current_page = normalize_space(await active_page.inner_text())
+                current_first_row = None
+                if await first_row.count() > 0:
+                    current_first_row = normalize_space(await first_row.inner_text())
+                if (
+                    current_page
+                    and current_page != previous_page
+                    and current_first_row is not None
+                    and current_first_row != previous_first_row
+                ):
+                    return True
+        except Exception:
+            pass
+        await asyncio.sleep(0.25)
+
+    raise RuntimeError(f"Pagination did not advance past page {previous_page or 'unknown'}")

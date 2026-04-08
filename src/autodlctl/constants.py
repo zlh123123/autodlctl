@@ -5,6 +5,7 @@ import re
 
 DEFAULT_URL = "https://www.autodl.com/console/instance/"
 BALANCE_URL = "https://www.autodl.com/console/cost/incomeExpend"
+DEFAULT_STORAGE_STATE_PATH = ".autodl/storage_state.json"
 
 START_LABELS = ("开机", "启动", "启动实例", "启动容器", "开始")
 STOP_LABELS = ("关机", "停止", "关闭", "停止实例", "销毁")

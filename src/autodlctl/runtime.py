@@ -10,8 +10,10 @@ from typing import Iterable
 _BROWSER_CHECK_DONE = False
 
 
-async def safe_close_playwright_resources(context, browser) -> None:
-    for closer in (context.close, browser.close):
+async def safe_close_playwright_resources(context, browser=None) -> None:
+    for closer in (context.close, getattr(browser, "close", None)):
+        if closer is None:
+            continue
         try:
             await closer()
         except Exception:
@@ -74,15 +76,46 @@ async def browser_page(
     timeout_ms: int,
     storage_state_path: str | None = None,
     permissions: Iterable[str] | None = None,
+    browser_channel: str | None = None,
+    browser_profile_dir: str | None = None,
 ):
     from playwright.async_api import async_playwright
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=headless)
+        launch_kwargs: dict[str, object] = {"headless": headless}
+        if browser_channel:
+            launch_kwargs["channel"] = browser_channel
         context_kwargs = {"viewport": {"width": 1440, "height": 900}}
         if storage_state_path:
             context_kwargs["storage_state"] = storage_state_path
-        context = await browser.new_context(**context_kwargs)
+
+        if browser_profile_dir:
+            profile_path = Path(browser_profile_dir)
+            profile_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                context = await playwright.chromium.launch_persistent_context(
+                    str(profile_path),
+                    **launch_kwargs,
+                    **context_kwargs,
+                )
+            except Exception:
+                if not browser_channel:
+                    raise
+                context = await playwright.chromium.launch_persistent_context(
+                    str(profile_path),
+                    headless=headless,
+                    **context_kwargs,
+                )
+            browser = context.browser
+        else:
+            try:
+                browser = await playwright.chromium.launch(**launch_kwargs)
+            except Exception:
+                if not browser_channel:
+                    raise
+                browser = await playwright.chromium.launch(headless=headless)
+            context = await browser.new_context(**context_kwargs)
+
         if permissions:
             await context.grant_permissions(list(permissions))
         page = await context.new_page()

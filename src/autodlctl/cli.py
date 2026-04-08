@@ -11,6 +11,7 @@ from autodlctl.commands.instances import run_auth, run_instance_action, run_list
 from autodlctl.constants import (
     BALANCE_URL,
     DEFAULT_URL,
+    DEFAULT_STORAGE_STATE_PATH,
     LIST_SORT_CHOICES,
     START_LABELS,
     STOP_LABELS,
@@ -33,7 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--headless", type=parse_bool, default=True)
     run_parser.add_argument("--timeout-ms", type=int, default=30_000)
     run_parser.add_argument("--screenshot", help="Optional screenshot output path")
-    run_parser.add_argument("--storage-state", help="Load Playwright storage state before opening the page")
+    run_parser.add_argument(
+        "--storage-state",
+        default=DEFAULT_STORAGE_STATE_PATH,
+        help="Load Playwright storage state before opening the page",
+    )
     run_parser.add_argument("--save-storage-state", help="Write Playwright storage state after the run")
 
     inspect_parser = subparsers.add_parser("inspect", help="Inspect visible controls on the AutoDL console page")
@@ -41,7 +46,11 @@ def build_parser() -> argparse.ArgumentParser:
     inspect_parser.add_argument("--headless", type=parse_bool, default=True)
     inspect_parser.add_argument("--timeout-ms", type=int, default=30_000)
     inspect_parser.add_argument("--screenshot", help="Optional screenshot output path")
-    inspect_parser.add_argument("--storage-state", help="Load Playwright storage state before opening the page")
+    inspect_parser.add_argument(
+        "--storage-state",
+        default=DEFAULT_STORAGE_STATE_PATH,
+        help="Load Playwright storage state before opening the page",
+    )
     inspect_parser.add_argument("--save-storage-state", help="Write Playwright storage state after the run")
     inspect_parser.add_argument("--max-items", type=int, default=80)
 
@@ -52,7 +61,11 @@ def build_parser() -> argparse.ArgumentParser:
     start_parser.add_argument("--headless", type=parse_bool, default=True)
     start_parser.add_argument("--timeout-ms", type=int, default=30_000)
     start_parser.add_argument("--screenshot", help="Optional screenshot output path")
-    start_parser.add_argument("--storage-state", help="Load Playwright storage state before opening the page")
+    start_parser.add_argument(
+        "--storage-state",
+        default=DEFAULT_STORAGE_STATE_PATH,
+        help="Load Playwright storage state before opening the page",
+    )
     start_parser.add_argument("--wait-label", help="Override the label to wait for after the click")
 
     stop_parser = subparsers.add_parser("stop", help="Stop a selected AutoDL instance by clicking the stop button")
@@ -61,7 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
     stop_parser.add_argument("--headless", type=parse_bool, default=True)
     stop_parser.add_argument("--timeout-ms", type=int, default=30_000)
     stop_parser.add_argument("--screenshot", help="Optional screenshot output path")
-    stop_parser.add_argument("--storage-state", help="Load Playwright storage state before opening the page")
+    stop_parser.add_argument(
+        "--storage-state",
+        default=DEFAULT_STORAGE_STATE_PATH,
+        help="Load Playwright storage state before opening the page",
+    )
     stop_parser.add_argument("--wait-label", help="Override the label to wait for after the click")
 
     detail_parser = subparsers.add_parser("detail", help="Open the detail panel for a selected AutoDL instance")
@@ -70,14 +87,22 @@ def build_parser() -> argparse.ArgumentParser:
     detail_parser.add_argument("--headless", type=parse_bool, default=True)
     detail_parser.add_argument("--timeout-ms", type=int, default=30_000)
     detail_parser.add_argument("--screenshot", help="Optional screenshot output path")
-    detail_parser.add_argument("--storage-state", help="Load Playwright storage state before opening the page")
+    detail_parser.add_argument(
+        "--storage-state",
+        default=DEFAULT_STORAGE_STATE_PATH,
+        help="Load Playwright storage state before opening the page",
+    )
 
     status_parser = subparsers.add_parser("status", help="Capture a status snapshot of the AutoDL console page")
     status_parser.add_argument("--url", default=DEFAULT_URL, help="Console URL to open")
     status_parser.add_argument("--headless", type=parse_bool, default=True)
     status_parser.add_argument("--timeout-ms", type=int, default=30_000)
     status_parser.add_argument("--screenshot", help="Optional screenshot output path")
-    status_parser.add_argument("--storage-state", help="Load Playwright storage state before opening the page")
+    status_parser.add_argument(
+        "--storage-state",
+        default=DEFAULT_STORAGE_STATE_PATH,
+        help="Load Playwright storage state before opening the page",
+    )
     status_parser.add_argument("--save-storage-state", help="Write Playwright storage state after the run")
     status_parser.add_argument("--max-items", type=int, default=80)
 
@@ -86,14 +111,22 @@ def build_parser() -> argparse.ArgumentParser:
     balance_parser.add_argument("--headless", type=parse_bool, default=True)
     balance_parser.add_argument("--timeout-ms", type=int, default=30_000)
     balance_parser.add_argument("--screenshot", help="Optional screenshot output path")
-    balance_parser.add_argument("--storage-state", help="Load Playwright storage state before opening the page")
+    balance_parser.add_argument(
+        "--storage-state",
+        default=DEFAULT_STORAGE_STATE_PATH,
+        help="Load Playwright storage state before opening the page",
+    )
 
     list_parser = subparsers.add_parser("list", help="List visible instance tables from the AutoDL console page")
     list_parser.add_argument("--url", default=DEFAULT_URL, help="Console URL to open")
     list_parser.add_argument("--headless", type=parse_bool, default=True)
     list_parser.add_argument("--timeout-ms", type=int, default=30_000)
     list_parser.add_argument("--screenshot", help="Optional screenshot output path")
-    list_parser.add_argument("--storage-state", help="Load Playwright storage state before opening the page")
+    list_parser.add_argument(
+        "--storage-state",
+        default=DEFAULT_STORAGE_STATE_PATH,
+        help="Load Playwright storage state before opening the page",
+    )
     list_parser.add_argument("--save-storage-state", help="Write Playwright storage state after the run")
     list_parser.add_argument("--max-tables", type=int, default=8)
     list_parser.add_argument(
@@ -124,10 +157,28 @@ def build_parser() -> argparse.ArgumentParser:
     )
     auth_parser.add_argument("--url", default=DEFAULT_URL, help="Console URL to open")
     auth_parser.add_argument("--headless", type=parse_bool, default=False)
-    auth_parser.add_argument("--pause-seconds", type=int, default=120)
+    auth_parser.add_argument(
+        "--pause-seconds",
+        type=int,
+        default=120,
+        help="Maximum time to wait for login confirmation before saving storage state",
+    )
     auth_parser.add_argument("--timeout-ms", type=int, default=30_000)
-    auth_parser.add_argument("--storage-state", help="Load an existing Playwright storage state before opening the page")
-    auth_parser.add_argument("--save-storage-state", required=True, help="Write Playwright storage state after the pause")
+    auth_parser.add_argument(
+        "--profile-dir",
+        default=".autodl/auth-profile",
+        help="Persistent browser profile directory used for auth",
+    )
+    auth_parser.add_argument(
+        "--storage-state",
+        default=DEFAULT_STORAGE_STATE_PATH,
+        help="Load an existing Playwright storage state before opening the page",
+    )
+    auth_parser.add_argument(
+        "--save-storage-state",
+        default=DEFAULT_STORAGE_STATE_PATH,
+        help="Write Playwright storage state after the pause",
+    )
 
     return parser
 
@@ -206,6 +257,7 @@ def run_command(args: argparse.Namespace) -> dict[str, object]:
                 pause_seconds=args.pause_seconds,
                 timeout_ms=args.timeout_ms,
                 storage_state_path=args.storage_state,
+                browser_profile_dir=args.profile_dir,
                 save_storage_state_path=args.save_storage_state,
             )
         )

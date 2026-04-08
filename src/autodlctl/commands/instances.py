@@ -10,6 +10,7 @@ from autodlctl.constants import (
 )
 from autodlctl.page_ops import (
     capture_instance_host_info,
+    advance_list_page,
     click_row_action,
     click_row_with_text,
     click_visible_overlay_action,
@@ -166,6 +167,41 @@ async def augment_instances_with_host_info(
     return instances
 
 
+async def collect_all_list_instances(
+    page,
+    *,
+    max_tables: int,
+    timeout_ms: int,
+    screenshot_path: str | None,
+) -> list[dict[str, Any]]:
+    collected_instances: list[dict[str, Any]] = []
+    seen_container_ids: set[str] = set()
+    page_index = 1
+
+    while True:
+        tables = await list_instances(page, max_tables=max_tables)
+        page_instances = summarize_instance_tables(tables)
+        page_instances = await augment_instances_with_host_info(page, page_instances, timeout_ms=max(3000, timeout_ms))
+
+        for instance in page_instances:
+            container_id = instance.get("container_id")
+            if container_id and container_id in seen_container_ids:
+                continue
+            if container_id:
+                seen_container_ids.add(container_id)
+            collected_instances.append(instance)
+
+        if screenshot_path and page_index == 1:
+            await page.screenshot(path=screenshot_path, full_page=True)
+
+        if not await advance_list_page(page, timeout_ms=max(3000, timeout_ms)):
+            break
+
+        page_index += 1
+
+    return collected_instances
+
+
 async def run_list(
     *,
     url: str,
@@ -195,11 +231,12 @@ async def run_list(
     ) as (context, page):
         await page.goto(url, wait_until="domcontentloaded")
         await page.wait_for_timeout(3000)
-        tables = await list_instances(page, max_tables=max_tables)
-        instances = summarize_instance_tables(tables)
-        if screenshot_path:
-            await page.screenshot(path=screenshot_path, full_page=True)
-        instances = await augment_instances_with_host_info(page, instances, timeout_ms=max(3000, timeout_ms))
+        instances = await collect_all_list_instances(
+            page,
+            max_tables=max_tables,
+            timeout_ms=timeout_ms,
+            screenshot_path=screenshot_path,
+        )
         matched_instances = filter_instance_summaries(
             instances,
             query=query,
@@ -266,6 +303,7 @@ async def run_auth(
     pause_seconds: int,
     timeout_ms: int,
     storage_state_path: str | None,
+    browser_profile_dir: str,
     save_storage_state_path: str,
 ) -> dict[str, Any]:
     from autodlctl.parsing import inspect_storage_state_cookie_expiry
@@ -274,32 +312,51 @@ async def run_auth(
         headless=headless,
         timeout_ms=timeout_ms,
         storage_state_path=storage_state_path,
+        browser_channel="chrome",
+        browser_profile_dir=browser_profile_dir,
     ) as (context, page):
         await page.goto(url, wait_until="domcontentloaded")
         await page.wait_for_timeout(3000)
         await page.locator("body").wait_for(state="visible")
-        deadline = asyncio.get_running_loop().time() + max(1, pause_seconds)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + max(1, pause_seconds)
+        login_url_markers = ("/login", "/register")
+        console_markers = (
+            "实例ID /名称",
+            "查看详情",
+            "开机",
+            "关机",
+            "SSH登录",
+            "快捷工具",
+            "释放时间/停机时间",
+        )
+        settle_seconds = 5
+        logged_in_since: float | None = None
         looks_logged_in = False
-        while True:
+        while loop.time() < deadline:
             current_url = page.url
             body_text = normalize_space(await page.locator("body").inner_text())
-            login_markers = ("登录", "注册", "短信登录", "微信登录", "忘记密码")
-            looks_logged_in = not any(marker in current_url for marker in ("/login", "/register")) and not any(
-                marker in body_text for marker in login_markers
+            current_logged_in = not any(marker in current_url for marker in login_url_markers) and any(
+                marker in body_text for marker in console_markers
             )
-            if looks_logged_in:
+            if current_logged_in:
+                looks_logged_in = True
+                if logged_in_since is None:
+                    logged_in_since = loop.time()
+                elif loop.time() - logged_in_since >= settle_seconds:
+                    break
+            else:
+                logged_in_since = None
+            remaining = deadline - loop.time()
+            if remaining <= 0:
                 break
-            if asyncio.get_running_loop().time() >= deadline:
-                break
-            await asyncio.sleep(3)
+            await asyncio.sleep(min(1 if current_logged_in else 3, remaining))
         await save_storage_state(context, save_storage_state_path)
         storage_state_check = inspect_storage_state_cookie_expiry(save_storage_state_path)
         return {
             "success": True,
-            "url": page.url,
-            "title": await page.title(),
             "saved_storage_state": save_storage_state_path,
-            "pause_seconds": pause_seconds,
             "detected_logged_in": looks_logged_in,
+            "browser_profile_dir": browser_profile_dir,
             "storage_state_check": storage_state_check,
         }
