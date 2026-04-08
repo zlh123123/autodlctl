@@ -19,6 +19,7 @@ from autodlctl.page_ops import (
     wait_for_access_summary,
     wait_for_detail_panel,
     wait_for_row_state,
+    wait_for_visible_selectors,
 )
 from autodlctl.parsing import (
     contains_any,
@@ -41,102 +42,97 @@ async def run_instance_action(args, labels: tuple[str, ...], action_name: str) -
         storage_state_path=args.storage_state,
         permissions=permissions,
     ) as (_context, page):
-        try:
-            await page.goto(args.url, wait_until="domcontentloaded")
-            await page.wait_for_timeout(3000)
-            await page.locator("body").wait_for(state="visible")
-            row_info = await click_row_with_text(page, args.instance)
-            row_locator = page.get_by_role("row").nth(row_info["row_index"])
-            row_text_before = row_info["row_text"]
+        await page.goto(args.url, wait_until="domcontentloaded")
+        await wait_for_visible_selectors(
+            page,
+            ("table tbody tr", ".el-pagination"),
+            timeout_ms=max(3000, args.timeout_ms),
+        )
+        row_info = await click_row_with_text(page, args.instance)
+        row_locator = row_info["row_locator"]
+        row_text_before = row_info["row_text"]
 
-            container_id = extract_container_id(row_text_before, args.instance)
-            identity = parse_identity_cell(row_text_before)
+        container_id = extract_container_id(row_text_before, args.instance)
+        identity = parse_identity_cell(row_text_before)
 
-            if action_name == "stop" and contains_any(row_text_before, STOP_SUCCESS_MARKERS):
+        if action_name == "stop" and contains_any(row_text_before, STOP_SUCCESS_MARKERS):
+            if args.screenshot:
+                await page.screenshot(path=args.screenshot, full_page=True)
+            return {"success": True, "container_id": container_id}
+
+        if action_name == "start" and getattr(args, "mode", "gpu") == "nocard":
+            if "运行中" in row_text_before:
                 if args.screenshot:
                     await page.screenshot(path=args.screenshot, full_page=True)
                 return {"success": True, "container_id": container_id}
-
-            if action_name == "start" and getattr(args, "mode", "gpu") == "nocard":
-                try:
-                    await click_row_action(page, args.instance, labels)
-                except Exception:
-                    if "运行中" not in row_text_before:
-                        raise
-                else:
-                    menu_click = await click_visible_overlay_action(
-                        page,
-                        (NO_CARD_START_LABEL,),
-                        timeout_ms=max(3000, args.timeout_ms),
-                    )
-                    if menu_click is None:
-                        raise RuntimeError(f"Could not find {NO_CARD_START_LABEL} in the More menu")
-            else:
-                try:
-                    await click_row_action(page, args.instance, labels)
-                except Exception:
-                    if "运行中" not in row_text_before:
-                        raise
-
-            if action_name == "detail":
-                detail_panel = await wait_for_detail_panel(page, timeout_ms=max(5000, args.timeout_ms))
-                if not detail_panel.get("found"):
-                    raise RuntimeError("Detail panel did not appear")
-                if args.screenshot:
-                    await page.screenshot(path=args.screenshot, full_page=True)
-                expected_host_name = None
-                if identity.get("site") and identity.get("host"):
-                    expected_host_name = f"{identity.get('site')} / {identity.get('host')}"
-                host_info = await capture_instance_host_info(
-                    page,
-                    row_locator,
-                    timeout_ms=max(5000, args.timeout_ms),
-                    expected_host_name=expected_host_name,
-                )
-                return {
-                    "success": True,
-                    "container_id": container_id,
-                    "host_info": host_info,
-                    "identity": {
-                        "site": identity.get("site"),
-                        "host": identity.get("host"),
-                        "instance_id": identity.get("instance_id") or container_id,
-                    },
-                    "detail": detail_panel.get("field_map", {}),
-                }
-
-            if action_name == "stop" or "运行中" not in row_text_before:
-                confirmation_info = await click_visible_overlay_action(
-                    page,
-                    ("确定", "确认"),
-                    timeout_ms=max(3000, args.timeout_ms),
-                )
-                if confirmation_info is None:
-                    raise RuntimeError("Confirmation dialog did not appear or could not be confirmed")
-
-            expected_markers = START_SUCCESS_MARKERS if action_name == "start" else STOP_SUCCESS_MARKERS
-            await wait_for_row_state(
-                row_locator,
-                expected_markers,
-                timeout_ms=max(5000, args.timeout_ms),
+            await click_row_action(page, args.instance, labels)
+            menu_click = await click_visible_overlay_action(
+                page,
+                (NO_CARD_START_LABEL,),
+                timeout_ms=max(3000, args.timeout_ms),
             )
+            if menu_click is None:
+                raise RuntimeError(f"Could not find {NO_CARD_START_LABEL} in the More menu")
+        else:
+            await click_row_action(page, args.instance, labels)
 
+        if action_name == "detail":
+            detail_panel = await wait_for_detail_panel(page, timeout_ms=max(5000, args.timeout_ms))
+            if not detail_panel.get("found"):
+                raise RuntimeError("Detail panel did not appear")
             if args.screenshot:
                 await page.screenshot(path=args.screenshot, full_page=True)
-            if action_name == "start":
-                await wait_for_access_summary(row_locator, timeout_ms=max(15000, args.timeout_ms))
-                credentials = await copy_running_instance_credentials(page, row_locator)
-                return {
-                    "success": True,
-                    "container_id": container_id,
-                    "access": {
-                        "ssh_command": credentials.get("ssh_command"),
-                        "ssh_password": credentials.get("ssh_password"),
-                    },
-                }
-            return {"success": True, "container_id": container_id}
-        except Exception as exc:
-            return {"success": False, "reason": str(exc)}
+            expected_host_name = None
+            if identity.get("site") and identity.get("host"):
+                expected_host_name = f"{identity.get('site')} / {identity.get('host')}"
+            host_info = await capture_instance_host_info(
+                page,
+                row_locator,
+                timeout_ms=max(5000, args.timeout_ms),
+                expected_host_name=expected_host_name,
+            )
+            return {
+                "success": True,
+                "container_id": container_id,
+                "host_info": host_info,
+                "identity": {
+                    "site": identity.get("site"),
+                    "host": identity.get("host"),
+                    "instance_id": identity.get("instance_id") or container_id,
+                },
+                "detail": detail_panel.get("field_map", {}),
+            }
+
+        if action_name == "stop" or "运行中" not in row_text_before:
+            confirmation_info = await click_visible_overlay_action(
+                page,
+                ("确定", "确认"),
+                timeout_ms=max(3000, args.timeout_ms),
+            )
+            if confirmation_info is None:
+                raise RuntimeError("Confirmation dialog did not appear or could not be confirmed")
+
+        expected_markers = START_SUCCESS_MARKERS if action_name == "start" else STOP_SUCCESS_MARKERS
+        await wait_for_row_state(
+            row_locator,
+            expected_markers,
+            timeout_ms=max(5000, args.timeout_ms),
+        )
+
+        if args.screenshot:
+            await page.screenshot(path=args.screenshot, full_page=True)
+        if action_name == "start":
+            await wait_for_access_summary(row_locator, timeout_ms=max(15000, args.timeout_ms))
+            credentials = await copy_running_instance_credentials(page, row_locator)
+            return {
+                "success": True,
+                "container_id": container_id,
+                "access": {
+                    "ssh_command": credentials.get("ssh_command"),
+                    "ssh_password": credentials.get("ssh_password"),
+                },
+            }
+        return {"success": True, "container_id": container_id}
 
 
 async def augment_instances_with_host_info(
@@ -173,10 +169,11 @@ async def collect_all_list_instances(
     max_tables: int,
     timeout_ms: int,
     screenshot_path: str | None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], str | None]:
     collected_instances: list[dict[str, Any]] = []
     seen_container_ids: set[str] = set()
     page_index = 1
+    pagination_warning: str | None = None
 
     while True:
         tables = await list_instances(page, max_tables=max_tables)
@@ -194,12 +191,18 @@ async def collect_all_list_instances(
         if screenshot_path and page_index == 1:
             await page.screenshot(path=screenshot_path, full_page=True)
 
-        if not await advance_list_page(page, timeout_ms=max(3000, timeout_ms)):
+        try:
+            advanced = await advance_list_page(page, timeout_ms=max(3000, timeout_ms))
+        except Exception as exc:
+            pagination_warning = str(exc)
+            break
+
+        if not advanced:
             break
 
         page_index += 1
 
-    return collected_instances
+    return collected_instances, pagination_warning
 
 
 async def run_list(
@@ -230,8 +233,12 @@ async def run_list(
         storage_state_path=storage_state_path,
     ) as (context, page):
         await page.goto(url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(3000)
-        instances = await collect_all_list_instances(
+        await wait_for_visible_selectors(
+            page,
+            ("table tbody tr", ".el-pagination"),
+            timeout_ms=max(3000, timeout_ms),
+        )
+        instances, pagination_warning = await collect_all_list_instances(
             page,
             max_tables=max_tables,
             timeout_ms=timeout_ms,
@@ -271,6 +278,8 @@ async def run_list(
             "success": True,
             "count": len(limited_instances),
             "instances": limited_instances,
+            **({"pagination_warning": pagination_warning} if pagination_warning else {}),
+            "pagination_complete": pagination_warning is None,
             **(
                 {
                     "filter": {
@@ -316,8 +325,13 @@ async def run_auth(
         browser_profile_dir=browser_profile_dir,
     ) as (context, page):
         await page.goto(url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(3000)
         await page.locator("body").wait_for(state="visible")
+        await wait_for_visible_selectors(
+            page,
+            ("input", "button", ".login", "form"),
+            timeout_ms=max(3000, timeout_ms),
+            required=False,
+        )
         loop = asyncio.get_running_loop()
         deadline = loop.time() + max(1, pause_seconds)
         login_url_markers = ("/login", "/register")

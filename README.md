@@ -52,7 +52,7 @@ playwright install chromium
 autodlctl auth --headless false --pause-seconds 180
 ```
 
-该命令会打开 AutoDL 控制台，优先使用本机 Chrome 渠道，并使用 `.autodl/auth-profile` 作为持久浏览器配置；如果系统中未安装 Chrome，则自动回退到 Playwright 自带的 Chromium。命令在确认登录成功后会尽快保存登录态并退出；`--pause-seconds` 表示最长等待时间，不会在超时前提前终止。默认将登录态保存到 `.autodl/storage_state.json`。
+该命令会打开 AutoDL 控制台，优先使用本机 Chrome 渠道，并使用 `~/.config/autodlctl/auth-profile` 作为持久浏览器配置；如果系统中未安装 Chrome，则自动回退到 Playwright 自带的 Chromium。命令在确认登录成功后会尽快保存登录态并退出；`--pause-seconds` 表示最长等待时间，不会在超时前提前终止。默认将登录态保存到 `.autodl/storage_state.json`。
 
 如果验证码持续失败，建议保持相同的 `--profile-dir` 继续重试，避免频繁删除该目录；如需重新初始化登录环境，可删除该目录后重新登录。
 

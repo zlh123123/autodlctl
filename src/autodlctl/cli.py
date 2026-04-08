@@ -10,6 +10,7 @@ from autodlctl.commands.generic import load_steps, open_and_inspect, run_status,
 from autodlctl.commands.instances import run_auth, run_instance_action, run_list
 from autodlctl.constants import (
     BALANCE_URL,
+    DEFAULT_AUTH_PROFILE_DIR,
     DEFAULT_URL,
     DEFAULT_STORAGE_STATE_PATH,
     LIST_SORT_CHOICES,
@@ -166,7 +167,7 @@ def build_parser() -> argparse.ArgumentParser:
     auth_parser.add_argument("--timeout-ms", type=int, default=30_000)
     auth_parser.add_argument(
         "--profile-dir",
-        default=".autodl/auth-profile",
+        default=DEFAULT_AUTH_PROFILE_DIR,
         help="Persistent browser profile directory used for auth",
     )
     auth_parser.add_argument(
@@ -193,75 +194,119 @@ def _labels_for_action(args: argparse.Namespace) -> tuple[str, ...]:
     raise ValueError(f"Unsupported action command: {args.command}")
 
 
+def _run_run_command(args: argparse.Namespace) -> dict[str, object]:
+    steps = load_steps(args.steps, args.steps_file)
+    return asyncio.run(
+        run_steps(
+            url=args.url,
+            steps=steps,
+            headless=bool(args.headless),
+            timeout_ms=args.timeout_ms,
+            screenshot_path=args.screenshot,
+            storage_state_path=args.storage_state,
+            save_storage_state_path=args.save_storage_state,
+        )
+    )
+
+
+def _run_inspect_command(args: argparse.Namespace) -> dict[str, object]:
+    return asyncio.run(
+        open_and_inspect(
+            url=args.url,
+            headless=bool(args.headless),
+            timeout_ms=args.timeout_ms,
+            screenshot_path=args.screenshot,
+            storage_state_path=args.storage_state,
+            max_items=args.max_items,
+            save_storage_state_path=args.save_storage_state,
+        )
+    )
+
+
+def _run_instance_action_command(args: argparse.Namespace) -> dict[str, object]:
+    return asyncio.run(run_instance_action(args, _labels_for_action(args), args.command))
+
+
+def _run_status_command(args: argparse.Namespace) -> dict[str, object]:
+    return asyncio.run(run_status(args))
+
+
+def _run_balance_command(args: argparse.Namespace) -> dict[str, object]:
+    return asyncio.run(run_balance(args))
+
+
+def _run_list_command(args: argparse.Namespace) -> dict[str, object]:
+    return asyncio.run(
+        run_list(
+            url=args.url,
+            headless=bool(args.headless),
+            timeout_ms=args.timeout_ms,
+            screenshot_path=args.screenshot,
+            storage_state_path=args.storage_state,
+            max_tables=args.max_tables,
+            query=args.query,
+            site=args.site,
+            host=args.host,
+            gpu_model=args.gpu_model,
+            gpu_driver=args.gpu_driver,
+            cuda_version=args.cuda_version,
+            status=args.status,
+            min_gpu_free=args.min_gpu_free,
+            min_data_disk_expandable_gb=args.min_data_disk_expandable_gb,
+            sort_by=args.sort_by,
+            sort_order=args.sort_order,
+            limit=args.limit,
+            save_storage_state_path=args.save_storage_state,
+        )
+    )
+
+
+def _run_auth_command(args: argparse.Namespace) -> dict[str, object]:
+    return asyncio.run(
+        run_auth(
+            url=args.url,
+            headless=bool(args.headless),
+            pause_seconds=args.pause_seconds,
+            timeout_ms=args.timeout_ms,
+            storage_state_path=args.storage_state,
+            browser_profile_dir=args.profile_dir,
+            save_storage_state_path=args.save_storage_state,
+        )
+    )
+
+
+COMMAND_HANDLERS = {
+    "run": _run_run_command,
+    "inspect": _run_inspect_command,
+    "start": _run_instance_action_command,
+    "stop": _run_instance_action_command,
+    "detail": _run_instance_action_command,
+    "status": _run_status_command,
+    "balance": _run_balance_command,
+    "list": _run_list_command,
+    "auth": _run_auth_command,
+}
+
+
+def _command_error_payload(exc: Exception) -> dict[str, object]:
+    error_type = type(exc).__name__
+    retryable = error_type in {"TimeoutError", "PlaywrightTimeoutError"}
+    return {
+        "success": False,
+        "error": {
+            "type": error_type,
+            "message": str(exc),
+            "retryable": retryable,
+        },
+    }
+
+
 def run_command(args: argparse.Namespace) -> dict[str, object]:
-    if args.command == "run":
-        steps = load_steps(args.steps, args.steps_file)
-        return asyncio.run(
-            run_steps(
-                url=args.url,
-                steps=steps,
-                headless=bool(args.headless),
-                timeout_ms=args.timeout_ms,
-                screenshot_path=args.screenshot,
-                storage_state_path=args.storage_state,
-                save_storage_state_path=args.save_storage_state,
-            )
-        )
-    if args.command == "inspect":
-        return asyncio.run(
-            open_and_inspect(
-                url=args.url,
-                headless=bool(args.headless),
-                timeout_ms=args.timeout_ms,
-                screenshot_path=args.screenshot,
-                storage_state_path=args.storage_state,
-                max_items=args.max_items,
-                save_storage_state_path=args.save_storage_state,
-            )
-        )
-    if args.command in {"start", "stop", "detail"}:
-        return asyncio.run(run_instance_action(args, _labels_for_action(args), args.command))
-    if args.command == "status":
-        return asyncio.run(run_status(args))
-    if args.command == "balance":
-        return asyncio.run(run_balance(args))
-    if args.command == "list":
-        return asyncio.run(
-            run_list(
-                url=args.url,
-                headless=bool(args.headless),
-                timeout_ms=args.timeout_ms,
-                screenshot_path=args.screenshot,
-                storage_state_path=args.storage_state,
-                max_tables=args.max_tables,
-                query=args.query,
-                site=args.site,
-                host=args.host,
-                gpu_model=args.gpu_model,
-                gpu_driver=args.gpu_driver,
-                cuda_version=args.cuda_version,
-                status=args.status,
-                min_gpu_free=args.min_gpu_free,
-                min_data_disk_expandable_gb=args.min_data_disk_expandable_gb,
-                sort_by=args.sort_by,
-                sort_order=args.sort_order,
-                limit=args.limit,
-                save_storage_state_path=args.save_storage_state,
-            )
-        )
-    if args.command == "auth":
-        return asyncio.run(
-            run_auth(
-                url=args.url,
-                headless=bool(args.headless),
-                pause_seconds=args.pause_seconds,
-                timeout_ms=args.timeout_ms,
-                storage_state_path=args.storage_state,
-                browser_profile_dir=args.profile_dir,
-                save_storage_state_path=args.save_storage_state,
-            )
-        )
-    raise ValueError(f"Unsupported command: {args.command}")
+    try:
+        handler = COMMAND_HANDLERS[args.command]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported command: {args.command}") from exc
+    return handler(args)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -287,8 +332,11 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
 
-    ensure_browser_installed()
-    result = run_command(args)
+    try:
+        ensure_browser_installed()
+        result = run_command(args)
+    except Exception as exc:
+        result = _command_error_payload(exc)
 
     if storage_state_check is not None and isinstance(result, dict):
         result["storage_state_check"] = storage_state_check

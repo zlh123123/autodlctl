@@ -18,6 +18,56 @@ async def read_clipboard_text(page) -> str:
     return await page.evaluate("navigator.clipboard.readText()")
 
 
+async def wait_for_visible_selectors(
+    page,
+    selectors: tuple[str, ...],
+    timeout_ms: int,
+    *,
+    required: bool = True,
+) -> str | None:
+    deadline = asyncio.get_running_loop().time() + max(0.5, timeout_ms / 1000)
+    last_error: Exception | None = None
+    while asyncio.get_running_loop().time() <= deadline:
+        for selector in selectors:
+            try:
+                locator = page.locator(selector)
+                if await locator.count() == 0:
+                    continue
+                candidate = locator.first
+                if await candidate.is_visible():
+                    return selector
+            except Exception as exc:
+                last_error = exc
+        await asyncio.sleep(0.25)
+
+    if required:
+        message = f"Timed out waiting for visible selectors: {', '.join(selectors)}"
+        if last_error is not None:
+            raise RuntimeError(message) from last_error
+        raise RuntimeError(message)
+    return None
+
+
+async def wait_for_clipboard_text(
+    page,
+    *,
+    previous_text: str | None = None,
+    timeout_ms: int = 2000,
+) -> str:
+    deadline = asyncio.get_running_loop().time() + max(0.5, timeout_ms / 1000)
+    last_text = previous_text or ""
+    while asyncio.get_running_loop().time() <= deadline:
+        try:
+            clipboard_text = (await read_clipboard_text(page)).strip()
+            if clipboard_text and clipboard_text != previous_text:
+                return clipboard_text
+            last_text = clipboard_text
+        except Exception:
+            pass
+        await asyncio.sleep(0.2)
+    return last_text
+
+
 async def copy_running_instance_credentials(page, row_locator) -> dict[str, Any]:
     await page.bring_to_front()
     login_sections = row_locator.locator(".login")
@@ -31,9 +81,17 @@ async def copy_running_instance_credentials(page, row_locator) -> dict[str, Any]
         copy_icon = section.locator(".icon-fuzhi").first
         if await copy_icon.count() == 0:
             raise RuntimeError(f"Could not find copy icon for {field_name}")
+        previous_clipboard = None
+        try:
+            previous_clipboard = (await read_clipboard_text(page)).strip()
+        except Exception:
+            previous_clipboard = None
         await copy_icon.click()
-        await page.wait_for_timeout(300)
-        clipboard_text = (await read_clipboard_text(page)).strip()
+        clipboard_text = await wait_for_clipboard_text(
+            page,
+            previous_text=previous_clipboard,
+            timeout_ms=2000,
+        )
         if not clipboard_text:
             raise RuntimeError(f"Clipboard was empty after copying {field_name}")
         credentials[field_name] = clipboard_text
@@ -86,7 +144,7 @@ async def click_row_with_text(page, needle: str) -> dict[str, Any]:
                 await row.click()
             except Exception:
                 pass
-            return {"row_index": index, "row_text": text}
+            return {"row_locator": row, "row_index": index, "row_text": text}
     raise RuntimeError(f"Could not find a row containing: {needle}")
 
 
@@ -112,6 +170,7 @@ async def click_row_action(page, needle: str, labels: tuple[str, ...]) -> dict[s
                         continue
                     await locator.first.click()
                     return {
+                        "row_locator": row,
                         "row_index": index,
                         "row_text": text,
                         "matched_label": label,

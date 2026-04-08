@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 
 DEFAULT_URL = "https://www.autodl.com/console/instance/"
 BALANCE_URL = "https://www.autodl.com/console/cost/incomeExpend"
 DEFAULT_STORAGE_STATE_PATH = ".autodl/storage_state.json"
+DEFAULT_AUTH_PROFILE_DIR = str(Path.home() / ".config" / "autodlctl" / "auth-profile")
 
 START_LABELS = ("开机", "启动", "启动实例", "启动容器", "开始")
 STOP_LABELS = ("关机", "停止", "关闭", "停止实例", "销毁")
@@ -91,8 +93,8 @@ LIST_SORT_CHOICES = (
     "lifecycle",
 )
 
-# Require at least one digit so host aliases like "host-a" are not misread as instance ids.
-INSTANCE_ID_RE = re.compile(r"\b(?=[a-z0-9-]*\d)[a-z0-9]{4,}-[a-z0-9]+\b", re.IGNORECASE)
+# Match the AutoDL container IDs observed in the console while avoiding short host aliases or loose UUID fragments.
+INSTANCE_ID_RE = re.compile(r"\b(?=[a-z0-9-]*\d)[a-z0-9]{8,12}-[a-z0-9]{8}\b", re.IGNORECASE)
 GPU_QUOTA_RE = re.compile(r"^\s*(\d+)\s*/\s*(\d+)\s*$")
 
 SESSION_COOKIE_DOMAIN_SUFFIX = "autodl.com"

@@ -17,7 +17,8 @@ from autodlctl.parsing import (
 
 def test_normalize_space_and_container_id() -> None:
     assert normalize_space("  hello   world ") == "hello world"
-    assert extract_container_id("北京 / host-a abcdef-1234 测试实例") == "abcdef-1234"
+    assert extract_container_id("北京 / host-a 8d4e4393c8-fe777ef1 测试实例") == "8d4e4393c8-fe777ef1"
+    assert extract_container_id("北京 / host-a shared-1234 测试实例") is None
 
 
 def test_gpu_parsing_helpers() -> None:
@@ -137,7 +138,7 @@ def test_summarize_instance_tables() -> None:
                 "rows": [
                     {
                         "cells": [
-                            "北京 / host-a abcdef-1234 实例A",
+                            "北京 / host-a 8d4e4393c8-fe777ef1 实例A",
                             "运行中 GPU充足",
                             "RTX 4090 * 2卡 查看详情",
                             "100G",
@@ -148,7 +149,7 @@ def test_summarize_instance_tables() -> None:
                             "jupyter",
                             "查看详情 关机",
                         ],
-                        "text": "北京 / host-a abcdef-1234 实例A 运行中 GPU充足 RTX 4090 * 2卡 查看详情 100G 正常 按时 2026-04-10 设置定时关机 ssh jupyter 查看详情 关机",
+                        "text": "北京 / host-a 8d4e4393c8-fe777ef1 实例A 运行中 GPU 充足 RTX 4090 * 2卡 查看详情 100G 正常 按时 2026-04-10 设置定时关机 ssh jupyter 查看详情 关机",
                     }
                 ],
             }
@@ -156,7 +157,7 @@ def test_summarize_instance_tables() -> None:
     }
 
     summary = summarize_instance_tables(payload)
-    assert summary[0]["container_id"] == "abcdef-1234"
+    assert summary[0]["container_id"] == "8d4e4393c8-fe777ef1"
     assert summary[0]["identity"]["site"] == "北京"
     assert summary[0]["gpu_model"] == "RTX 4090"
     assert summary[0]["gpu_cards"] == 2

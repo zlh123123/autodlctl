@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from autodlctl.page_ops import wait_for_visible_selectors
 from autodlctl.runtime import browser_page
 
 
@@ -10,7 +11,7 @@ async def run_balance(args) -> dict[str, object]:
         storage_state_path=args.storage_state,
     ) as (_context, page):
         await page.goto(args.url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(3000)
+        await wait_for_visible_selectors(page, ("table",), timeout_ms=max(3000, args.timeout_ms))
 
         balance_info = await page.evaluate(
             r"""

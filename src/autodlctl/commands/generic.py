@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from autodlctl.models import StepResult
-from autodlctl.page_ops import inspect_page
+from autodlctl.page_ops import inspect_page, wait_for_visible_selectors
 from autodlctl.runtime import browser_page, save_storage_state
 
 
@@ -37,6 +37,12 @@ async def run_steps(
         storage_state_path=storage_state_path,
     ) as (context, page):
         await page.goto(url, wait_until="domcontentloaded")
+        await wait_for_visible_selectors(
+            page,
+            ("table", "button", "input", ".el-pagination"),
+            timeout_ms=max(3000, timeout_ms),
+            required=False,
+        )
 
         for index, step in enumerate(steps, start=1):
             op = step.get("op")
@@ -114,7 +120,12 @@ async def open_and_inspect(
         storage_state_path=storage_state_path,
     ) as (context, page):
         await page.goto(url, wait_until="domcontentloaded")
-        await page.wait_for_timeout(3000)
+        await wait_for_visible_selectors(
+            page,
+            ("table", "button", "input", ".el-pagination"),
+            timeout_ms=max(3000, timeout_ms),
+            required=False,
+        )
         inspection = await inspect_page(page, max_items=max_items)
         if screenshot_path:
             await page.screenshot(path=screenshot_path, full_page=True)

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from autodlctl.constants import DEFAULT_AUTH_PROFILE_DIR
 from autodlctl.commands import instances
 from autodlctl import cli
 import autodlctl.parsing as parsing
@@ -164,9 +165,13 @@ async def test_run_auth_waits_full_pause_window(monkeypatch, tmp_path) -> None:
         sleep_calls.append(seconds)
         fake_time["value"] += seconds
 
+    async def fake_wait_for_visible_selectors(*args, **kwargs):
+        return None
+
     monkeypatch.setattr(instances, "browser_page", fake_browser_page)
     monkeypatch.setattr(instances.asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(instances.asyncio, "get_running_loop", lambda: FakeLoop())
+    monkeypatch.setattr(instances, "wait_for_visible_selectors", fake_wait_for_visible_selectors)
     monkeypatch.setattr(
         parsing,
         "inspect_storage_state_cookie_expiry",
@@ -179,7 +184,7 @@ async def test_run_auth_waits_full_pause_window(monkeypatch, tmp_path) -> None:
         pause_seconds=30,
         timeout_ms=30_000,
         storage_state_path=None,
-        browser_profile_dir=".autodl/auth-profile",
+        browser_profile_dir=DEFAULT_AUTH_PROFILE_DIR,
         save_storage_state_path=str(tmp_path / "state.json"),
     )
 
@@ -190,13 +195,13 @@ async def test_run_auth_waits_full_pause_window(monkeypatch, tmp_path) -> None:
             "timeout_ms": 30_000,
             "storage_state_path": None,
             "browser_channel": "chrome",
-            "browser_profile_dir": ".autodl/auth-profile",
+            "browser_profile_dir": DEFAULT_AUTH_PROFILE_DIR,
         }
     ]
     assert saved_paths == [str(tmp_path / "state.json")]
     assert result["success"] is True
     assert result["detected_logged_in"] is True
-    assert result["browser_profile_dir"] == ".autodl/auth-profile"
+    assert result["browser_profile_dir"] == DEFAULT_AUTH_PROFILE_DIR
     assert result["storage_state_check"]["status"] == "fresh"
 
 
@@ -213,6 +218,24 @@ def test_main_auth_defaults_save_storage_state(monkeypatch, capsys) -> None:
 
     assert exit_code == 0
     assert payload["saved_storage_state"] == ".autodl/storage_state.json"
+
+
+def test_main_reports_structured_errors(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(cli, "ensure_browser_installed", lambda: None)
+    monkeypatch.setattr(cli, "inspect_storage_state_cookie_expiry", lambda path: {"checked": True, "status": "fresh", "path": path})
+
+    def fail_run_list(**kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "run_list", fail_run_list)
+
+    exit_code = cli.main(["list"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == 1
+    assert payload["success"] is False
+    assert payload["error"]["type"] == "RuntimeError"
+    assert payload["error"]["retryable"] is False
 
 
 @pytest.mark.asyncio
@@ -270,7 +293,7 @@ async def test_run_list_collects_all_pages(monkeypatch, tmp_path) -> None:
                         "快捷工具",
                         "操作",
                     ],
-                    "rows": [make_row(f"insta-{index:02d}", f"实例{index:02d}") for index in range(1, 11)],
+                        "rows": [make_row(f"id{index:08d}-0000{index:04d}", f"实例{index:02d}") for index in range(1, 11)],
                 }
             ]
         },
@@ -289,7 +312,7 @@ async def test_run_list_collects_all_pages(monkeypatch, tmp_path) -> None:
                         "快捷工具",
                         "操作",
                     ],
-                    "rows": [make_row(f"insta-{index:02d}", f"实例{index:02d}") for index in range(11, 14)],
+                        "rows": [make_row(f"id{index:08d}-0000{index:04d}", f"实例{index:02d}") for index in range(11, 14)],
                 }
             ]
         },
@@ -309,10 +332,14 @@ async def test_run_list_collects_all_pages(monkeypatch, tmp_path) -> None:
             instance["host_info"] = {"host_name": "北京 / host-a"}
         return instances
 
+    async def fake_wait_for_visible_selectors(*args, **kwargs):
+        return None
+
     monkeypatch.setattr(instances, "browser_page", fake_browser_page)
     monkeypatch.setattr(instances, "list_instances", fake_list_instances)
     monkeypatch.setattr(instances, "advance_list_page", fake_advance_list_page)
     monkeypatch.setattr(instances, "augment_instances_with_host_info", fake_augment_instances_with_host_info)
+    monkeypatch.setattr(instances, "wait_for_visible_selectors", fake_wait_for_visible_selectors)
 
     result = await instances.run_list(
         url="https://www.autodl.com/console/instance/list",
@@ -338,6 +365,107 @@ async def test_run_list_collects_all_pages(monkeypatch, tmp_path) -> None:
 
     assert result["count"] == 13
     assert len(result["instances"]) == 13
-    assert result["instances"][0]["container_id"] == "insta-01"
-    assert result["instances"][-1]["container_id"] == "insta-13"
+    assert result["instances"][0]["container_id"] == "id00000001-00000001"
+    assert result["instances"][-1]["container_id"] == "id00000013-00000013"
     assert saved_paths == [str(tmp_path / "state.json")]
+
+
+@pytest.mark.asyncio
+async def test_run_list_keeps_first_page_on_pagination_failure(monkeypatch, tmp_path) -> None:
+    page_state = {"index": 1}
+
+    class FakePage:
+        async def goto(self, url: str, wait_until: str = "domcontentloaded") -> None:
+            return None
+
+        async def wait_for_timeout(self, ms: int) -> None:
+            return None
+
+    class FakeContext:
+        async def storage_state(self, path: str) -> None:
+            Path(path).write_text(json.dumps({"cookies": []}), encoding="utf-8")
+
+    @asynccontextmanager
+    async def fake_browser_page(**kwargs):
+        yield FakeContext(), FakePage()
+
+    def make_row(container_id: str) -> dict[str, object]:
+        cells = [
+            f"北京 / host-a {container_id} 实例",
+            "已关机",
+            "RTX 4090 * 1卡 查看详情",
+            "100G",
+            "正常",
+            "按量计费",
+            "1天后释放",
+            "ssh",
+            "jupyter",
+            "查看详情 开机",
+        ]
+        return {"cells": cells, "text": " ".join(cells)}
+
+    page_tables = {
+        1: {
+            "tables": [
+                {
+                    "headers": [
+                        "实例ID /名称",
+                        "状态",
+                        "规格详情",
+                        "本地磁盘",
+                        "健康状态",
+                        "付费方式",
+                        "释放时间/停机时间",
+                        "SSH登录",
+                        "快捷工具",
+                        "操作",
+                    ],
+                    "rows": [make_row(f"id{index:08d}-0000{index:04d}") for index in range(1, 11)],
+                }
+            ]
+        }
+    }
+
+    async def fake_list_instances(page, max_tables: int = 8):
+        return page_tables[page_state["index"]]
+
+    async def fake_advance_list_page(page, timeout_ms: int = 5000) -> bool:
+        raise RuntimeError("Pagination did not advance past page 1")
+
+    async def fake_augment_instances_with_host_info(page, instances, timeout_ms: int):
+        return instances
+
+    async def fake_wait_for_visible_selectors(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(instances, "browser_page", fake_browser_page)
+    monkeypatch.setattr(instances, "list_instances", fake_list_instances)
+    monkeypatch.setattr(instances, "advance_list_page", fake_advance_list_page)
+    monkeypatch.setattr(instances, "augment_instances_with_host_info", fake_augment_instances_with_host_info)
+    monkeypatch.setattr(instances, "wait_for_visible_selectors", fake_wait_for_visible_selectors)
+
+    result = await instances.run_list(
+        url="https://www.autodl.com/console/instance/list",
+        headless=False,
+        timeout_ms=30_000,
+        screenshot_path=None,
+        storage_state_path=None,
+        max_tables=8,
+        query=None,
+        site=None,
+        host=None,
+        gpu_model=None,
+        gpu_driver=None,
+        cuda_version=None,
+        status=None,
+        min_gpu_free=None,
+        min_data_disk_expandable_gb=None,
+        sort_by=None,
+        sort_order="asc",
+        limit=None,
+        save_storage_state_path=str(tmp_path / "state.json"),
+    )
+
+    assert result["count"] == 10
+    assert result["pagination_complete"] is False
+    assert "Pagination did not advance" in result["pagination_warning"]
