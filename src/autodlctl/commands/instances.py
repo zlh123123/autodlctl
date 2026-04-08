@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from typing import Any
 
 from autodlctl.constants import (
@@ -43,11 +44,7 @@ async def run_instance_action(args, labels: tuple[str, ...], action_name: str) -
         permissions=permissions,
     ) as (_context, page):
         await page.goto(args.url, wait_until="domcontentloaded")
-        await wait_for_visible_selectors(
-            page,
-            ("table tbody tr", ".el-pagination"),
-            timeout_ms=max(3000, args.timeout_ms),
-        )
+        await wait_for_instance_list_ready(page, timeout_ms=max(3000, args.timeout_ms))
         row_info = await click_row_with_text(page, args.instance)
         row_locator = row_info["row_locator"]
         row_text_before = row_info["row_text"]
@@ -163,6 +160,39 @@ async def augment_instances_with_host_info(
     return instances
 
 
+async def wait_for_instance_list_ready(page, timeout_ms: int, settle_ms: int = 5000) -> bool:
+    deadline = asyncio.get_running_loop().time() + max(0.5, timeout_ms / 1000)
+    empty_seen_at: float | None = None
+    settle_seconds = max(0.5, settle_ms / 1000)
+
+    while asyncio.get_running_loop().time() <= deadline:
+        try:
+            tables = await list_instances(page, max_tables=8)
+            if summarize_instance_tables(tables):
+                return True
+
+            body_text = normalize_space(tables.get("bodyText"))
+            now = asyncio.get_running_loop().time()
+            match = re.search(r"共\s*(\d+)\s*条", body_text)
+            if match:
+                if int(match.group(1)) > 0:
+                    return True
+                if empty_seen_at is None:
+                    empty_seen_at = now
+                elif now - empty_seen_at >= settle_seconds:
+                    return False
+            elif "暂无数据" in body_text:
+                if empty_seen_at is None:
+                    empty_seen_at = now
+                elif now - empty_seen_at >= settle_seconds:
+                    return False
+        except Exception:
+            pass
+        await asyncio.sleep(0.25)
+
+    return False
+
+
 async def collect_all_list_instances(
     page,
     *,
@@ -233,11 +263,7 @@ async def run_list(
         storage_state_path=storage_state_path,
     ) as (context, page):
         await page.goto(url, wait_until="domcontentloaded")
-        await wait_for_visible_selectors(
-            page,
-            ("table tbody tr", ".el-pagination"),
-            timeout_ms=max(3000, timeout_ms),
-        )
+        await wait_for_instance_list_ready(page, timeout_ms=max(3000, timeout_ms))
         instances, pagination_warning = await collect_all_list_instances(
             page,
             max_tables=max_tables,

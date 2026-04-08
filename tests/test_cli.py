@@ -5,12 +5,13 @@ import json
 import runpy
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from autodlctl.constants import DEFAULT_AUTH_PROFILE_DIR
-from autodlctl.commands import instances
-from autodlctl import cli
+from autodlctl.commands import account, instances
+from autodlctl import cli, runtime
 import autodlctl.parsing as parsing
 
 
@@ -205,6 +206,173 @@ async def test_run_auth_waits_full_pause_window(monkeypatch, tmp_path) -> None:
     assert result["storage_state_check"]["status"] == "fresh"
 
 
+@pytest.mark.asyncio
+async def test_run_balance_waits_for_delayed_rows(monkeypatch) -> None:
+    fake_time = {"value": 0.0}
+    sleep_calls: list[float] = []
+    evaluate_calls = {"count": 0}
+
+    class FakeLoop:
+        def time(self) -> float:
+            return fake_time["value"]
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.url = ""
+
+        async def goto(self, url: str, wait_until: str = "domcontentloaded") -> None:
+            self.url = url
+
+        async def evaluate(self, script: str):
+            evaluate_calls["count"] += 1
+            if evaluate_calls["count"] < 3:
+                return {"found": False}
+            return {
+                "found": True,
+                "headers": ["流水号", "交易时间", "收支类型", "交易类型", "交易渠道", "交易金额", "账户余额", "备注"],
+                "row": ["177563174683205491", "2026-04-08 15:02:27", "支出", "消费", "余额", "￥ - 0.03", "￥ 96.43", "容器实例ID：9d1044903a-e0db08fd"],
+                "balance": "￥ 96.43",
+            }
+
+        async def screenshot(self, path: str, full_page: bool = True) -> None:
+            return None
+
+    @asynccontextmanager
+    async def fake_browser_page(**kwargs):
+        yield object(), FakePage()
+
+    async def fake_sleep(seconds: float) -> None:
+        sleep_calls.append(seconds)
+        fake_time["value"] += seconds
+
+    monkeypatch.setattr(account, "browser_page", fake_browser_page)
+    monkeypatch.setattr(account.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(account.asyncio, "get_running_loop", lambda: FakeLoop())
+
+    result = await account.run_balance(
+        SimpleNamespace(
+            headless=True,
+            timeout_ms=1000,
+            storage_state=".autodl/storage_state.json",
+            url="https://www.autodl.com/console/cost/incomeExpend",
+            screenshot=None,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["balance"] == "￥ 96.43"
+    assert result["source_url"] == "https://www.autodl.com/console/cost/incomeExpend"
+    assert evaluate_calls["count"] == 3
+    assert sleep_calls == [0.25, 0.25]
+
+
+@pytest.mark.asyncio
+async def test_browser_page_applies_storage_state_for_persistent_context(monkeypatch, tmp_path) -> None:
+    state_path = tmp_path / "state.json"
+    state_payload = {
+        "cookies": [
+            {
+                "name": "session",
+                "value": "abc123",
+                "domain": ".autodl.com",
+                "path": "/",
+            }
+        ],
+        "origins": [
+            {
+                "origin": "https://www.autodl.com",
+                "localStorage": [
+                    {
+                        "name": "token",
+                        "value": "xyz789",
+                    }
+                ],
+            }
+        ],
+    }
+    state_path.write_text(json.dumps(state_payload), encoding="utf-8")
+
+    launch_calls: list[tuple[str, dict[str, object]]] = []
+
+    class FakePage:
+        def __init__(self) -> None:
+            self.default_timeout_ms: int | None = None
+
+        def set_default_timeout(self, timeout_ms: int) -> None:
+            self.default_timeout_ms = timeout_ms
+
+    class FakeBrowser:
+        def __init__(self) -> None:
+            self.closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class FakeContext:
+        def __init__(self) -> None:
+            self.browser = FakeBrowser()
+            self.cookies: list[dict[str, object]] = []
+            self.init_scripts: list[str] = []
+            self.closed = False
+
+        async def add_cookies(self, cookies: list[dict[str, object]]) -> None:
+            self.cookies = cookies
+
+        async def add_init_script(self, script: str) -> None:
+            self.init_scripts.append(script)
+
+        async def grant_permissions(self, permissions: list[str]) -> None:
+            return None
+
+        async def new_page(self) -> FakePage:
+            return FakePage()
+
+        async def close(self) -> None:
+            self.closed = True
+
+    class FakeChromium:
+        async def launch_persistent_context(self, profile_path: str, **kwargs) -> FakeContext:
+            launch_calls.append((profile_path, kwargs))
+            return FakeContext()
+
+        async def launch(self, **kwargs):
+            raise AssertionError("launch() should not be called for persistent auth")
+
+    class FakePlaywright:
+        def __init__(self) -> None:
+            self.chromium = FakeChromium()
+
+    @asynccontextmanager
+    async def fake_async_playwright():
+        yield FakePlaywright()
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", fake_async_playwright)
+
+    async with runtime.browser_page(
+        headless=False,
+        timeout_ms=12_345,
+        storage_state_path=str(state_path),
+        browser_channel="chrome",
+        browser_profile_dir=str(tmp_path / "profile"),
+    ) as (context, page):
+        assert page.default_timeout_ms == 12_345
+        assert context.cookies == state_payload["cookies"]
+        assert len(context.init_scripts) == 1
+        assert "https://www.autodl.com" in context.init_scripts[0]
+        assert "token" in context.init_scripts[0]
+
+    assert launch_calls == [
+        (
+            str(tmp_path / "profile"),
+            {
+                "headless": False,
+                "channel": "chrome",
+                "viewport": {"width": 1440, "height": 900},
+            },
+        )
+    ]
+
+
 def test_main_auth_defaults_save_storage_state(monkeypatch, capsys) -> None:
     monkeypatch.setattr(cli, "ensure_browser_installed", lambda: None)
 
@@ -367,6 +535,130 @@ async def test_run_list_collects_all_pages(monkeypatch, tmp_path) -> None:
     assert len(result["instances"]) == 13
     assert result["instances"][0]["container_id"] == "id00000001-00000001"
     assert result["instances"][-1]["container_id"] == "id00000013-00000013"
+    assert saved_paths == [str(tmp_path / "state.json")]
+
+
+@pytest.mark.asyncio
+async def test_run_list_waits_for_rows_before_collecting(monkeypatch, tmp_path) -> None:
+    saved_paths: list[str] = []
+    list_calls = {"count": 0}
+
+    class FakePage:
+        async def goto(self, url: str, wait_until: str = "domcontentloaded") -> None:
+            return None
+
+        async def wait_for_timeout(self, ms: int) -> None:
+            return None
+
+        async def screenshot(self, path: str, full_page: bool = True) -> None:
+            return None
+
+    class FakeContext:
+        async def storage_state(self, path: str) -> None:
+            saved_paths.append(path)
+            Path(path).write_text(json.dumps({"cookies": []}), encoding="utf-8")
+
+    @asynccontextmanager
+    async def fake_browser_page(**kwargs):
+        yield FakeContext(), FakePage()
+
+    def make_row(container_id: str, name: str) -> dict[str, object]:
+        cells = [
+            f"北京 / host-a {container_id} {name}",
+            "已关机",
+            "RTX 4090 * 1卡",
+            "100G",
+            "正常",
+            "按量计费",
+            "1天后释放",
+            "ssh",
+            "jupyter",
+            "查看详情 开机",
+        ]
+        return {"cells": cells, "text": " ".join(cells)}
+
+    async def fake_list_instances(page, max_tables: int = 8):
+        list_calls["count"] += 1
+        if list_calls["count"] < 3:
+            return {
+                "tables": [
+                    {
+                        "headers": [
+                            "实例ID /名称",
+                            "状态",
+                            "规格详情",
+                            "本地磁盘",
+                            "健康状态",
+                            "付费方式",
+                            "释放时间/停机时间",
+                            "SSH登录",
+                            "快捷工具",
+                            "操作",
+                        ],
+                        "rows": [],
+                    }
+                ],
+                "bodyText": "暂无数据 共 0 条 1 前往 页",
+            }
+        return {
+            "tables": [
+                {
+                    "headers": [
+                        "实例ID /名称",
+                        "状态",
+                        "规格详情",
+                        "本地磁盘",
+                        "健康状态",
+                        "付费方式",
+                        "释放时间/停机时间",
+                        "SSH登录",
+                        "快捷工具",
+                        "操作",
+                    ],
+                    "rows": [make_row("id00000001-00000001", "实例01")],
+                }
+            ],
+            "bodyText": "实例ID /名称 状态 规格详情 本地磁盘 健康状态 付费方式 释放时间/停机时间 SSH登录 快捷工具 操作 实例01 共 1 条 1 前往 页",
+        }
+
+    async def fake_advance_list_page(page, timeout_ms: int = 5000) -> bool:
+        return False
+
+    async def fake_augment_instances_with_host_info(page, instances, timeout_ms: int):
+        for instance in instances:
+            instance["host_info"] = {"host_name": "北京 / host-a"}
+        return instances
+
+    monkeypatch.setattr(instances, "browser_page", fake_browser_page)
+    monkeypatch.setattr(instances, "list_instances", fake_list_instances)
+    monkeypatch.setattr(instances, "advance_list_page", fake_advance_list_page)
+    monkeypatch.setattr(instances, "augment_instances_with_host_info", fake_augment_instances_with_host_info)
+
+    result = await instances.run_list(
+        url="https://www.autodl.com/console/instance/list",
+        headless=False,
+        timeout_ms=30_000,
+        screenshot_path=None,
+        storage_state_path=None,
+        max_tables=8,
+        query=None,
+        site=None,
+        host=None,
+        gpu_model=None,
+        gpu_driver=None,
+        cuda_version=None,
+        status=None,
+        min_gpu_free=None,
+        min_data_disk_expandable_gb=None,
+        sort_by=None,
+        sort_order="asc",
+        limit=None,
+        save_storage_state_path=str(tmp_path / "state.json"),
+    )
+
+    assert list_calls["count"] >= 3
+    assert result["count"] == 1
+    assert result["instances"][0]["container_id"] == "id00000001-00000001"
     assert saved_paths == [str(tmp_path / "state.json")]
 
 

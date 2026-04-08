@@ -1,7 +1,67 @@
 from __future__ import annotations
 
-from autodlctl.page_ops import wait_for_visible_selectors
+import asyncio
+from typing import Any
+
 from autodlctl.runtime import browser_page
+
+
+BALANCE_TABLE_EVALUATION_SCRIPT = r"""
+() => {
+    const normalize = (text) => (text || '').trim().replace(/\s+/g, ' ');
+    const isVisible = (el) => {
+        const style = window.getComputedStyle(el);
+        const rect = el.getBoundingClientRect();
+        return style && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+
+    const tables = Array.from(document.querySelectorAll('table')).filter(isVisible);
+    let lastHeaders = [];
+    for (const table of tables) {
+        const tableHeaders = Array.from(table.querySelectorAll('thead th, tr th')).map((th) => normalize(th.innerText || th.textContent)).filter(Boolean);
+        if (tableHeaders.length > 0) {
+            lastHeaders = tableHeaders;
+        }
+
+        const headers = tableHeaders.length > 0 ? tableHeaders : lastHeaders;
+        const headerText = headers.join(' ');
+        const dataRows = Array.from(table.querySelectorAll('tbody tr')).filter(isVisible);
+        if (!headerText.includes('账户余额') || dataRows.length === 0) continue;
+
+        const firstRow = dataRows[0];
+        const cells = Array.from(firstRow.querySelectorAll('td')).map((td) => normalize(td.innerText || td.textContent));
+        const balanceIndex = headers.indexOf('账户余额');
+        if (balanceIndex < 0 || !cells[balanceIndex]) continue;
+        return {
+            found: true,
+            headers,
+            row: cells,
+            balance: cells[balanceIndex],
+        };
+    }
+
+    return {found: false};
+}
+"""
+
+
+async def _capture_balance_info(page) -> dict[str, Any]:
+    return await page.evaluate(BALANCE_TABLE_EVALUATION_SCRIPT)
+
+
+async def _wait_for_balance_info(page, timeout_ms: int) -> dict[str, Any]:
+    deadline = asyncio.get_running_loop().time() + max(0.5, timeout_ms / 1000)
+    last_balance_info: dict[str, Any] | None = None
+    while asyncio.get_running_loop().time() <= deadline:
+        try:
+            last_balance_info = await _capture_balance_info(page)
+            if last_balance_info.get("found") and last_balance_info.get("balance"):
+                return last_balance_info
+        except Exception:
+            pass
+        await asyncio.sleep(0.25)
+
+    return last_balance_info or {"found": False}
 
 
 async def run_balance(args) -> dict[str, object]:
@@ -11,47 +71,7 @@ async def run_balance(args) -> dict[str, object]:
         storage_state_path=args.storage_state,
     ) as (_context, page):
         await page.goto(args.url, wait_until="domcontentloaded")
-        await wait_for_visible_selectors(page, ("table",), timeout_ms=max(3000, args.timeout_ms))
-
-        balance_info = await page.evaluate(
-            r"""
-            () => {
-                const normalize = (text) => (text || '').trim().replace(/\s+/g, ' ');
-                const isVisible = (el) => {
-                    const style = window.getComputedStyle(el);
-                    const rect = el.getBoundingClientRect();
-                    return style && style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
-                };
-
-                const tables = Array.from(document.querySelectorAll('table')).filter(isVisible);
-                let lastHeaders = [];
-                for (const table of tables) {
-                    const tableHeaders = Array.from(table.querySelectorAll('thead th, tr th')).map((th) => normalize(th.innerText || th.textContent)).filter(Boolean);
-                    if (tableHeaders.length > 0) {
-                        lastHeaders = tableHeaders;
-                    }
-
-                    const headers = tableHeaders.length > 0 ? tableHeaders : lastHeaders;
-                    const headerText = headers.join(' ');
-                    const dataRows = Array.from(table.querySelectorAll('tbody tr')).filter(isVisible);
-                    if (!headerText.includes('账户余额') || dataRows.length === 0) continue;
-
-                    const firstRow = dataRows[0];
-                    const cells = Array.from(firstRow.querySelectorAll('td')).map((td) => normalize(td.innerText || td.textContent));
-                    const balanceIndex = headers.indexOf('账户余额');
-                    if (balanceIndex < 0 || !cells[balanceIndex]) continue;
-                    return {
-                        found: true,
-                        headers,
-                        row: cells,
-                        balance: cells[balanceIndex],
-                    };
-                }
-
-                return {found: false};
-            }
-            """
-        )
+        balance_info = await _wait_for_balance_info(page, timeout_ms=max(3000, args.timeout_ms))
 
         if args.screenshot:
             await page.screenshot(path=args.screenshot, full_page=True)

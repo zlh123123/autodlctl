@@ -68,7 +68,6 @@ autodlctl list
 
 ```bash
 autodlctl list \
-  --storage-state .autodl/storage_state.json \
   --gpu-model 4090 \
   --min-gpu-free 1 \
   --sort-by rentable_until
@@ -78,21 +77,22 @@ autodlctl list \
 
 ```bash
 autodlctl detail \
-  --storage-state .autodl/storage_state.json \
   --instance "你的实例名称或实例 ID"
 ```
 
+`detail` 默认读取 `.autodl/storage_state.json`，一般不需要显式传 `--storage-state`；如需改成其他路径，再手动指定即可。
+
 ### 4. 开机 / 关机
+
+`start` 和 `stop` 也默认读取 `.autodl/storage_state.json`，通常直接传实例名或实例 ID 就可以。
 
 ```bash
 autodlctl start \
-  --storage-state .autodl/storage_state.json \
   --instance "你的实例名称或实例 ID"
 ```
 
 ```bash
 autodlctl stop \
-  --storage-state .autodl/storage_state.json \
   --instance "你的实例名称或实例 ID"
 ```
 
@@ -100,7 +100,6 @@ autodlctl stop \
 
 ```bash
 autodlctl start \
-  --storage-state .autodl/storage_state.json \
   --instance "你的实例名称或实例 ID" \
   --mode nocard
 ```

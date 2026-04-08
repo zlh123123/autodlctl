@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 
 _BROWSER_CHECK_DONE = False
@@ -69,6 +70,65 @@ async def save_storage_state(context, save_storage_state_path: str | None) -> No
     await context.storage_state(path=save_storage_state_path)
 
 
+async def load_storage_state(context, storage_state_path: str | None) -> None:
+    if not storage_state_path:
+        return
+
+    path = Path(storage_state_path)
+    if not path.is_file():
+        return
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError(f"Could not parse storage state JSON: {storage_state_path}") from exc
+
+    if not isinstance(payload, dict):
+        raise ValueError(f"Storage state file is not a JSON object: {storage_state_path}")
+
+    cookies = payload.get("cookies") or []
+    if cookies:
+        await context.add_cookies(cookies)
+
+    origin_storage: dict[str, dict[str, Any]] = {}
+    for origin_entry in payload.get("origins") or []:
+        if not isinstance(origin_entry, dict):
+            continue
+
+        origin = origin_entry.get("origin")
+        local_storage = origin_entry.get("localStorage") or []
+        if not origin or not local_storage:
+            continue
+
+        entries: dict[str, Any] = {}
+        for item in local_storage:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            if not name:
+                continue
+            entries[str(name)] = item.get("value")
+
+        if entries:
+            origin_storage[str(origin)] = entries
+
+    if origin_storage:
+        await context.add_init_script(
+            f"""
+(() => {{
+  const storageState = {json.dumps(origin_storage)};
+  const entries = storageState[window.location.origin];
+  if (!entries) {{
+    return;
+  }}
+  for (const [name, value] of Object.entries(entries)) {{
+    window.localStorage.setItem(name, value);
+  }}
+}})();
+"""
+        )
+
+
 @asynccontextmanager
 async def browser_page(
     *,
@@ -86,7 +146,7 @@ async def browser_page(
         if browser_channel:
             launch_kwargs["channel"] = browser_channel
         context_kwargs = {"viewport": {"width": 1440, "height": 900}}
-        if storage_state_path:
+        if storage_state_path and not browser_profile_dir:
             context_kwargs["storage_state"] = storage_state_path
 
         if browser_profile_dir:
@@ -118,6 +178,8 @@ async def browser_page(
 
         if permissions:
             await context.grant_permissions(list(permissions))
+        if browser_profile_dir:
+            await load_storage_state(context, storage_state_path)
         page = await context.new_page()
         page.set_default_timeout(timeout_ms)
         try:
